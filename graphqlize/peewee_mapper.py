@@ -50,6 +50,25 @@ class PeeweeMapper:
         return fields
 
     @staticmethod
+    def get_self_resolver(model):
+        """
+        Returns a resolver function that resolves a single instance of the model itself.
+        """
+        def self_resolver(*args, **kwargs):
+            # TODO instead of this, dynamically generate a query via model.getattr(field_name) == field_value
+            return model.get(*args, **kwargs)
+        return self_resolver
+
+    @staticmethod
+    def get_self_many_resolver(model):
+        """
+        Returns a resolver function that resolves many instances of the model itself.
+        """
+        def self_many_resolver(**kwargs):
+            return model.select().where
+        return self_many_resolver
+
+    @staticmethod
     def get_resolvers(model):
         # TODO implement me
         return {}
@@ -62,9 +81,12 @@ def _map_peewee_field(field):
     :returns: A Graphene field.
     """
     if isinstance(field, peewee.ForeignKeyField):
+        # TODO ensure that this generated field has proper arguments added to it (to select on the different columns of the referenced model)
         return graphqlize(field.rel_model, mapper=PeeweeMapper)
+    # TODO handle one-to-many relationships here somehow? E.g. if ModelA references ModelB many-to-one, ModelB should end up with a List[ModelANode]
     graphene_field = peewee_to_graphene_fields.get(type(field), None)
     if graphene_field:
+        # TODO should I add any inputs here?
         return graphene_field(description=field.help_text,
                               default_value=field.default)
     logger.warning('Unable to resolve field %s to a Graphene field',
