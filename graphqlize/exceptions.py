@@ -1,0 +1,2 @@
+class GraphQLizeException(Exception):
+    pass

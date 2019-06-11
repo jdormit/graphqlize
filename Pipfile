@@ -4,11 +4,12 @@ url = "https://pypi.org/simple"
 verify_ssl = true
 
 [dev-packages]
-pyls = {extras = ["all"],version = "*"}
 
 [packages]
 graphene = "*"
 peewee = "*"
+protocol = "*"
+typing-extensions = "*"
 
 [requires]
 python_version = "2.7"

@@ -1,11 +1,14 @@
 """
 Mapping logic for Peewee models
 """
+from __future__ import absolute_import
+
 import logging
 import peewee
 import graphene
+from typing import List, Any, Optional
 
-from graphqlize import graphqlize
+from graphqlize import graphqlize, GraphQLizeException
 
 logger = logging.getLogger('graphqlize.peewee_mapper')
 
@@ -22,7 +25,6 @@ peewee_to_graphene_fields = {
     peewee.DoubleField: graphene.Float,
     peewee.FixedCharField: graphene.String,
     peewee.FloatField: graphene.Float,
-    # TODO resolve peewee.ForeignKeyFields to graphqlized nodes
     peewee.IntegerField: graphene.Int,
     peewee.PrimaryKeyField: graphene.ID,
     peewee.TextField: graphene.String,
@@ -54,9 +56,8 @@ class PeeweeMapper:
         """
         Returns a resolver function that resolves a single instance of the model itself.
         """
-        def self_resolver(*args, **kwargs):
-            # TODO instead of this, dynamically generate a query via model.getattr(field_name) == field_value
-            return model.get(*args, **kwargs)
+        def self_resolver(source, info, **kwargs):
+            return model.get(*_kwargs_to_peewee_exprs(model, kwargs))
         return self_resolver
 
     @staticmethod
@@ -64,14 +65,33 @@ class PeeweeMapper:
         """
         Returns a resolver function that resolves many instances of the model itself.
         """
-        def self_many_resolver(**kwargs):
-            return model.select().where
+        def self_many_resolver(source, info, **kwargs):
+            return model.select().where(*_kwargs_to_peewee_exprs(model, kwargs))
         return self_many_resolver
 
     @staticmethod
     def get_resolvers(model):
-        # TODO implement me
-        return {}
+        # For most fields, we can just rely on the underlying Peewee model for resolution.
+        # However, we do need custom resolvers for foreign keys
+        resolvers = {}
+        for field_name, field in model._meta.fields.items():
+            if isinstance(field, peewee.ForeignKeyField):
+                # TODO cache this and below instances of graphqlize to avoid repeating work
+                graphqlized = graphqlize(field.rel_model, mapper=PeeweeMapper)
+                resolvers['resolve_{}'.format(field.name)] = graphqlized.resolve
+            # TODO support List[ForeignKeyField]
+        return resolvers
+
+
+def _kwargs_to_peewee_exprs(model, kwargs):
+    # type: (Any, dict) -> List[peewee.Expression]
+    exprs = []
+    for field_name, query_value in kwargs.items():
+        field = getattr(model, field_name)  # type: Optional[peewee.Field]
+        if not field:
+            raise GraphQLizeException('Model {} has no field {}'.format(model, field_name))
+        exprs.append(field == query_value)
+    return exprs
 
 
 def _map_peewee_field(field):
@@ -81,14 +101,22 @@ def _map_peewee_field(field):
     :returns: A Graphene field.
     """
     if isinstance(field, peewee.ForeignKeyField):
-        # TODO ensure that this generated field has proper arguments added to it (to select on the different columns of the referenced model)
-        return graphqlize(field.rel_model, mapper=PeeweeMapper)
+        return graphene.Field(graphqlize(field.rel_model, mapper=PeeweeMapper), **_map_field_args(field.rel_model))
     # TODO handle one-to-many relationships here somehow? E.g. if ModelA references ModelB many-to-one, ModelB should end up with a List[ModelANode]
     graphene_field = peewee_to_graphene_fields.get(type(field), None)
     if graphene_field:
-        # TODO should I add any inputs here?
         return graphene_field(description=field.help_text,
                               default_value=field.default)
-    logger.warning('Unable to resolve field %s to a Graphene field',
-                   field.name)
+    logger.warning('Unable to resolve field %s to a Graphene field', field.name)
 
+
+def _map_field_args(model):
+    args = {}
+    for field_name, field in model._meta.fields.items():
+        # For now, don't support foreign key fields as arguments. In the future it would
+        # be interesting to be able to pass e.g. an id value as an argument to be able
+        # to select on foreign key values
+        if isinstance(field, peewee.ForeignKeyField):
+            continue
+        args[field_name] = _map_peewee_field(field)
+    return args
